@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.library' version '8.6.1'
+    id 'org.jetbrains.kotlin.android' version '2.1.20'
+}
+
+android {
+    namespace 'com.paperreader.pdf'
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 24
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    // Provided by the Godot app at runtime.
+    compileOnly 'org.godotengine:godot:4.5.1.stable'
+    // Also declared in addons/pdf_reader/plugin.gd so it is bundled into the app.
+    compileOnly 'com.tom-roush:pdfbox-android:2.0.27.0'
+}
+
+// Copy the built AAR into the Godot project.
+tasks.register('copyAarToGodot', Copy) {
+    dependsOn 'assembleRelease'
+    from layout.buildDirectory.file('outputs/aar/pdfreader-release.aar')
+    into '../PaperReader/addons/pdf_reader/bin'
+}

@@ -1,0 +1,15 @@
+# Godot editor cache and the generated Android build template
+PaperReader/.godot/
+PaperReader/android/
+
+# Kotlin plugin build output (the built AAR in PaperReader/addons/pdf_reader/bin is committed)
+pdf_plugin/build/
+pdf_plugin/.gradle/
+pdf_plugin/.kotlin/
+pdf_plugin/local.properties
+
+# APKs, screenshots and analysis dumps pulled from devices
+build/
+*.apk
+*.aab
+*.idsig

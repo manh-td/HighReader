@@ -53,6 +53,18 @@ Known quirks:
 - Two devices used for testing: Lenovo tablet TB322FC (1904x3040) and Samsung Galaxy A55 (1080x2340).
   Use `adb -s <serial>` when both are connected.
 
+## CI: building the APK on GitHub
+
+`.github/workflows/build-apk.yml` (manual trigger: Actions > "Build APK" > Run workflow).
+On ubuntu-latest it installs JDK 17 and the Android SDK (platform 35, build-tools 35.0.0,
+NDK 28.1), builds the plugin AAR, downloads Godot 4.5.1 and its export templates, writes
+Godot editor settings, and exports a debug APK. The APK is uploaded as an artifact, and
+optionally as a GitHub Release.
+- Inputs: `version_name` (empty keeps `export_presets.cfg`); `version/code` is set to the run number.
+- Secret `DEBUG_KEYSTORE_BASE64` (optional): base64 of the local Godot debug keystore
+  (`%APPDATA%\Godot\keystores\debug.keystore`). With it, CI builds share the local builds'
+  signature and install over them. Without it, each run signs with a new throwaway key.
+
 ## Data and storage
 
 - Files live in `Documents/HighReader/` on the device: `papers/` (imported PDFs),

@@ -1,0 +1,173 @@
+# Builds the HighReader Android APK from the latest code.
+# Run it by hand: GitHub > Actions > "Build APK" > Run workflow.
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Version name shown in Android (e.g. 0.2). Empty = keep the one in export_presets.cfg"
+        required: false
+        default: ""
+      publish_release:
+        description: "Also publish the APK as a GitHub Release"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write   # only used when publish_release is on
+
+env:
+  GODOT_VERSION: "4.5.1"
+  GODOT_TAG: "4.5.1-stable"
+  ANDROID_PLATFORM: "android-35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  ANDROID_NDK: "28.1.13356709"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platform-tools
+            platforms;${{ env.ANDROID_PLATFORM }}
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            ndk;${{ env.ANDROID_NDK }}
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pdf_plugin/**/*.gradle', 'pdf_plugin/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Build the PDF plugin (AAR)
+        working-directory: pdf_plugin
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          chmod +x gradlew
+          ./gradlew copyAarToGodot --no-daemon --console=plain
+          ls -l ../PaperReader/addons/pdf_reader/bin/
+
+      - name: Cache Godot
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_TAG }}
+
+      - name: Download Godot and export templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot && cd ~/godot
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_TAG}"
+          curl -fsSL -o godot.zip "$base/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          curl -fsSL -o templates.tpz "$base/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q godot.zip && rm godot.zip
+          mv "Godot_v${GODOT_TAG}_linux.x86_64" godot
+          chmod +x godot
+
+      - name: Install export templates and editor settings
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          # Export templates
+          tdir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$tdir"
+          unzip -q -o ~/godot/templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* "$tdir/"
+
+          # Signing key. Use the repository secret DEBUG_KEYSTORE_BASE64 (your Godot debug
+          # keystore, base64) so new APKs install over older ones; otherwise make a throwaway key.
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$HOME/debug.keystore"
+            echo "Using debug keystore from secrets"
+          else
+            echo "::warning::No DEBUG_KEYSTORE_BASE64 secret: signing with a new key. Uninstall older HighReader builds before installing this one."
+            keytool -genkeypair -keystore "$HOME/debug.keystore" -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # Tell Godot where the Android SDK, Java and the key are
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.5.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+          cat "$HOME/.config/godot/editor_settings-4.5.tres"
+
+      - name: Set version
+        id: version
+        env:
+          VERSION_INPUT: ${{ inputs.version_name }}
+        run: |
+          preset=PaperReader/export_presets.cfg
+          name=$(printf "%s" "$VERSION_INPUT" | tr -cd 'A-Za-z0-9._-')
+          if [ -z "$name" ]; then
+            name=$(sed -n 's/^version\/name="\(.*\)".*/\1/p' "$preset" | tr -d '\r')
+          fi
+          code=${{ github.run_number }}
+          sed -i "s/^version\/name=.*/version\/name=\"$name\"/" "$preset"
+          sed -i "s/^version\/code=.*/version\/code=$code/" "$preset"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Building version $name (code $code)"
+
+      - name: Import project
+        run: ~/godot/godot --headless --path PaperReader --import || true
+
+      - name: Export APK
+        run: |
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/debug.keystore"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android
+          mkdir -p build
+          out="$GITHUB_WORKSPACE/build/HighReader-${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}.apk"
+          # The headless export sometimes doesn't exit after writing the APK, so cap its time.
+          timeout 25m ~/godot/godot --headless --path PaperReader \
+            --install-android-build-template --export-debug "Android" "$out" || true
+          test -s "$out" || { echo "APK was not created"; exit 1; }
+          ls -l build/
+          echo "APK=$out" >> "$GITHUB_ENV"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HighReader-${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}
+          path: ${{ env.APK }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}-build${{ steps.version.outputs.code }}
+          name: HighReader ${{ steps.version.outputs.name }} (build ${{ steps.version.outputs.code }})
+          files: ${{ env.APK }}
+          body: |
+            Debug-signed APK built from ${{ github.sha }}.
+            Install with `adb install -r` or open the file on the device.

@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -97,7 +97,10 @@ jobs:
           # Signing key. Use the repository secret DEBUG_KEYSTORE_BASE64 (your Godot debug
           # keystore, base64) so new APKs install over older ones; otherwise make a throwaway key.
           if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
-            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$HOME/debug.keystore"
+            # Strip line breaks/spaces (a secret saved from Windows can end in \r\n).
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > "$HOME/debug.keystore"
+            keytool -list -keystore "$HOME/debug.keystore" -storepass android | grep -q androiddebugkey \
+              || { echo "::error::DEBUG_KEYSTORE_BASE64 is not a keystore with alias androiddebugkey / password android"; exit 1; }
             echo "Using debug keystore from secrets"
           else
             echo "::warning::No DEBUG_KEYSTORE_BASE64 secret: signing with a new key. Uninstall older HighReader builds before installing this one."
